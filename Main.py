@@ -1,4 +1,4 @@
-# Wevorn Offsets Dumper v1.2
+# Wevorn Offsets Dumper v1.3
 
 from pathlib import Path
 import re
@@ -21,8 +21,13 @@ Targets = {
           "XREF_Count_On_XREF": 4, # Required exact number of XREFs referencing the selected XREF function address (0 = disabled)
           "XREF_Unique": False, # Remove duplicate XREF functions
           "XREF_Include_Thunk": False, # Include Thunk functions in XREF results
+          "XREF_Function_Is_Thunk": None, # True = only Thunk, False = exclude Thunk, None = disabled
+          "XREF_Function_Size_Min": 0x10, # Minimum function size in bytes (0 = disabled)
+          "XREF_Function_Size_Max": 0x1000, # Maximum function size in bytes (0 = disabled)
           "Print_Not_Found": True, # Print functions that were not found
           "Save_Not_Found": True, # Save functions that were not found
+          "Address_Range": ("0x0", "0xFFFFFFFFFFFFFFFF"), # Filter string addresses by range (None = disabled)
+          "XREF_Address_Range": ("0x0", "0xFFFFFFFFFFFFFFFF"), # Filter XREF function addresses by range (None = disabled)
       },
    },
 }
@@ -51,6 +56,13 @@ for Data in Listing.getDefinedData(True):
    Value = str(Data.getValue())
    for Namespace, Functions in Targets.items():
       for Name, Target in Functions.items():
+         AddressRange = Target.get("Address_Range", None)
+         if AddressRange:
+            Address = Data.getAddress().getOffset()
+            Start = int(AddressRange[0], 16)
+            End = int(AddressRange[1], 16)
+            if not Start <= Address <= End:
+               continue
          if Target.get("String_Regex", False):
             if not re.search(Target["String"], Value):
                continue
@@ -68,7 +80,25 @@ for Data in Listing.getDefinedData(True):
             Function = FunctionManager.getFunctionContaining(Ref.getFromAddress())
             if not Function:
                continue
+            FunctionSize = Function.getBody().getNumAddresses()
+            if Target.get("XREF_Function_Size_Min", 0) != 0 and FunctionSize < Target["XREF_Function_Size_Min"]:
+               continue
+            if Target.get("XREF_Function_Size_Max", 0) != 0 and FunctionSize > Target["XREF_Function_Size_Max"]:
+               continue
+            AddressRange = Target.get("XREF_Address_Range", None)
+            if AddressRange:
+               Address = Function.getEntryPoint().getOffset()
+               Start = int(AddressRange[0], 16)
+               End = int(AddressRange[1], 16)
+               if not Start <= Address <= End:
+                  continue
             if not Target.get("XREF_Include_Thunk", False) and Function.isThunk():
+               continue
+            IsThunk = Target.get("XREF_Function_Is_Thunk", None)
+            if IsThunk is not None:
+               if Function.isThunk() != IsThunk:
+                  continue
+            elif not Target.get("XREF_Include_Thunk", False) and Function.isThunk():
                continue
             if Target.get("XREF_Type", "") and not Function.getName().startswith(Target["XREF_Type"]):
                continue
