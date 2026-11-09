@@ -1,4 +1,4 @@
-# Wevorn Offsets Dumper v1.3
+# Wevorn Offsets Dumper v1.4
 
 from pathlib import Path
 import re
@@ -13,7 +13,7 @@ Targets = {
           "XREF_Type": "FUN_", # Filter XREF functions by name prefix
           "Use_XREF": True, # Find functions referencing the target string
           "XREF": 1, # Selects the XREF function by index (1 = first, 2 = second, 0 = all)
-          "XREF_Count": 1, # Required exact number of unique referenced functions
+          "XREF_Count": 1, # Required exact number of referenced functions (duplicates depend on XREF_Unique)
           "XREF_Min": 1, # Minimum number of unique functions referencing the string (0 = disabled)
           "XREF_Max": 1, # Maximum number of unique functions referencing the string (0 = disabled)
           "XREF_Min_On_XREF": 2, # Minimum number of references to the selected XREF function (0 = disabled)
@@ -24,6 +24,11 @@ Targets = {
           "XREF_Function_Is_Thunk": None, # True = only Thunk, False = exclude Thunk, None = disabled
           "XREF_Function_Size_Min": 0x10, # Minimum function size in bytes (0 = disabled)
           "XREF_Function_Size_Max": 0x1000, # Maximum function size in bytes (0 = disabled)
+          "XREF_Function_Is_External": None, # True = only external, False = exclude external, None = disabled
+          "XREF_Instruction_Count_Min": 0, # Minimum number of instructions (0 = disabled)
+          "XREF_Instruction_Count_Max": 99999, # Maximum number of instructions (0 = disabled)
+          "XREF_Parameter_Count_Min": 0, # Minimum number of function parameters (0 = disabled)
+          "XREF_Parameter_Count_Max": 99999, # Maximum number of function parameters (0 = disabled)
           "Print_Not_Found": True, # Print functions that were not found
           "Save_Not_Found": True, # Save functions that were not found
           "Address_Range": ("0x0", "0xFFFFFFFFFFFFFFFF"), # Filter string addresses by range (None = disabled)
@@ -49,7 +54,7 @@ def ToRVA(Address):
    return "0x{:X}".format(Address.getOffset() - currentProgram.getImageBase().getOffset())
 
 Results = {Namespace: {} for Namespace in Targets}
-
+InstructionCache = {}
 for Data in Listing.getDefinedData(True):
    if not Data.hasStringValue():
       continue
@@ -80,6 +85,22 @@ for Data in Listing.getDefinedData(True):
             Function = FunctionManager.getFunctionContaining(Ref.getFromAddress())
             if not Function:
                continue
+            ParameterCount = Function.getParameterCount()
+            if Target.get("XREF_Parameter_Count_Min", 0) != 0 and ParameterCount < Target["XREF_Parameter_Count_Min"]:
+               continue
+            if Target.get("XREF_Parameter_Count_Max", 0) != 0 and ParameterCount > Target["XREF_Parameter_Count_Max"]:
+               continue
+            EntryPoint = Function.getEntryPoint()
+            if EntryPoint not in InstructionCache:
+               InstructionCache[EntryPoint] = sum(1 for _ in Listing.getInstructions(Function.getBody(), True))
+            InstructionCount = InstructionCache[EntryPoint]
+            if Target.get("XREF_Instruction_Count_Min", 0) != 0 and InstructionCount < Target["XREF_Instruction_Count_Min"]:
+               continue
+            if Target.get("XREF_Instruction_Count_Max", 0) != 0 and InstructionCount > Target["XREF_Instruction_Count_Max"]:
+               continue
+            IsExternal = Target.get("XREF_Function_Is_External", None)
+            if IsExternal is not None and Function.isExternal() != IsExternal:
+               continue
             FunctionSize = Function.getBody().getNumAddresses()
             if Target.get("XREF_Function_Size_Min", 0) != 0 and FunctionSize < Target["XREF_Function_Size_Min"]:
                continue
@@ -92,8 +113,6 @@ for Data in Listing.getDefinedData(True):
                End = int(AddressRange[1], 16)
                if not Start <= Address <= End:
                   continue
-            if not Target.get("XREF_Include_Thunk", False) and Function.isThunk():
-               continue
             IsThunk = Target.get("XREF_Function_Is_Thunk", None)
             if IsThunk is not None:
                if Function.isThunk() != IsThunk:
@@ -132,8 +151,10 @@ for Data in Listing.getDefinedData(True):
          Results[Namespace].setdefault(Name, []).extend((ToRVA(Function.getEntryPoint()), Function.getEntryPoint()) for Function in Found)
          if Use_Print:
             for Function in Found:
-               print(f"\nNamespace: {Namespace}\nName: {Name}\nString Address: {ToRVA(Data.getAddress())}\nFunction: {Function.getName()}\nFunction Address: {ToRVA(Function.getEntryPoint())}\nXREF Count: {XREF_Count}\nXREF on Function: {len(list(ReferenceManager.getReferencesTo(Function.getEntryPoint())))}")
-
+               try:
+                  print(f"[{Namespace}] {Name} | Value: {Value!r} | Data Type: {Data.getDataType().getName()} | Data RVA: {ToRVA(Data.getAddress())} | Data Size: 0x{Data.getLength():X} | Function: {Function.getName()} | Function RVA: {ToRVA(Function.getEntryPoint())} | Function Size: 0x{Function.getBody().getNumAddresses():X} | Instructions: {InstructionCache.get(Function.getEntryPoint(), 0)} | Parameters: {Function.getParameterCount()} | Thunk: {Function.isThunk()} | External: {Function.isExternal()} | Data XREFs: {len(list(ReferenceManager.getReferencesTo(Data.getAddress())))} | Function XREFs: {len(list(ReferenceManager.getReferencesTo(Function.getEntryPoint())))}")
+               except:
+                  pass
 for Namespace in Results:
    for Name in Results[Namespace]:
       if Targets[Namespace][Name].get("XREF_Unique", True):
@@ -156,4 +177,4 @@ for Namespace, Functions in Targets.items():
 Output.append("}")
 
 OutputPath = Path.cwd() / "offsets.h"
-OutputPath.write_text("\n".join(Output) + "\n", encoding="utf-8")
+OutputPath.write_text("\n".join(Output) + "\n", encoding = "utf-8")
